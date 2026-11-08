@@ -1,0 +1,24 @@
+# Experimental overlay for compose.yaml; no ports or Traefik attachment.
+# Do not deploy until the validation and threat-model gates in egress.md pass.
+services:
+  server:
+    environment:
+      WAZE_EGRESS_PROXY: egress:3128
+  egress:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.egress
+    restart: unless-stopped
+    networks:
+      - quarantine
+      - egress_outbound
+    labels:
+      traefik.enable: "false"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+networks:
+  egress_outbound: {}

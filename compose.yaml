@@ -1,0 +1,28 @@
+# Quarantined staging configuration: deliberately has no Traefik route.
+# See docs/deployment.md; this is NOT ready for public deployment.
+services:
+  server:
+    build:
+      context: ./server
+    restart: unless-stopped
+    environment:
+      DATABASE_PATH: /data/destinations.db
+      LISTEN_ADDR: :8080
+      DEVICE_KEY_FILE: /run/secrets/device_key
+    secrets:
+      - device_key
+    volumes:
+      - destination_data:/data
+    networks:
+      - quarantine
+    labels:
+      traefik.enable: "false"
+
+secrets:
+  device_key:
+    file: ${DEVICE_KEY_HOST_FILE:?Set DEVICE_KEY_HOST_FILE to the absolute path of the device key file}
+volumes:
+  destination_data:
+networks:
+  quarantine:
+    internal: true

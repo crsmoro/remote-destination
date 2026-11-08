@@ -1,0 +1,12 @@
+# Install via the existing Traefik file provider only after review.
+# Paths are inside the Traefik container; mount the directory read-only.
+http:
+  serversTransports:
+    waze-remote-mtls:
+      serverName: proxy
+      insecureSkipVerify: false
+      rootCAs:
+        - /etc/waze-traefik/server-ca.crt
+      certificates:
+        - certFile: /etc/waze-traefik/client.crt
+          keyFile: /etc/waze-traefik/client.key

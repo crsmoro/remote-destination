@@ -1,0 +1,11 @@
+FROM golang:1.24.10-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /egress ./cmd/egress
+FROM alpine:3.22
+RUN addgroup -S egress && adduser -S -G egress egress
+USER egress:egress
+COPY --from=build /egress /egress
+ENTRYPOINT ["/egress"]

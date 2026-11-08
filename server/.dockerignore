@@ -1,0 +1,5 @@
+.tools
+*.db
+*.db-*
+.env
+*.key

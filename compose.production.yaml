@@ -1,0 +1,68 @@
+# Candidate only: do not enable the route before the documented release gates.
+services:
+  backend:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      DATABASE_PATH: /data/destinations.db
+      LISTEN_ADDR: :8080
+      DEVICE_KEY_FILE: /run/secrets/device_key
+      WAZE_EGRESS_PROXY: egress:3128
+      AUTH0_AGENT_CLIENT_ID: ${AUTH0_AGENT_CLIENT_ID:?Set AUTH0_AGENT_CLIENT_ID}
+      AUTH0_AGENT_ISSUER: ${AUTH0_AGENT_ISSUER:?Set AUTH0_AGENT_ISSUER}
+      AUTH0_AGENT_AUDIENCE: ${AUTH0_AGENT_AUDIENCE:?Set AUTH0_AGENT_AUDIENCE}
+    secrets: [device_key]
+    volumes: ["destination_data:/data"]
+    networks: [private]
+    labels:
+      traefik.enable: "false"
+  proxy:
+    image: nginx:1.27-alpine
+    user: "10000:10000"
+    entrypoint: ["nginx"]
+    command: ["-g", "daemon off;"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./security-design/proxy.conf:/etc/nginx/nginx.conf:ro
+      - ${WAZE_PROXY_PKI_DIR:?Set WAZE_PROXY_PKI_DIR to an absolute host directory}:/etc/waze-pki:ro
+    networks: [private, traefik]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "${TRAEFIK_NETWORK:?Set TRAEFIK_NETWORK}"
+      traefik.http.routers.waze-remote.rule: "Host(`${WAZE_PUBLIC_HOST:?Set WAZE_PUBLIC_HOST}`)"
+      traefik.http.routers.waze-remote.entrypoints: https
+      traefik.http.routers.waze-remote.tls: "true"
+      traefik.http.routers.waze-remote.service: waze-remote
+      traefik.http.services.waze-remote.loadbalancer.server.port: "8443"
+      traefik.http.services.waze-remote.loadbalancer.server.scheme: https
+      traefik.http.services.waze-remote.loadbalancer.serverstransport: waze-remote-mtls@file
+  egress:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.egress
+    restart: unless-stopped
+    environment:
+      AUTH0_AGENT_ISSUER: ${AUTH0_AGENT_ISSUER:?Set AUTH0_AGENT_ISSUER}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    networks: [private, outbound]
+    labels:
+      traefik.enable: "false"
+secrets:
+  device_key:
+    file: ${DEVICE_KEY_HOST_FILE:?Set DEVICE_KEY_HOST_FILE to an absolute host file}
+volumes:
+  destination_data:
+networks:
+  private:
+    internal: true
+  outbound: {}
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:?Set TRAEFIK_NETWORK}
