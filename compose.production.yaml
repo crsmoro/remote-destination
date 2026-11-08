@@ -1,6 +1,7 @@
 # Candidate only: do not enable the route before the documented release gates.
 services:
   backend:
+    image: waze-release-backend:20261108t185635
     build: ./server
     restart: unless-stopped
     environment:
@@ -9,8 +10,8 @@ services:
       DEVICE_KEY_FILE: /run/secrets/device_key
       WAZE_EGRESS_PROXY: egress:3128
       AUTH0_AGENT_CLIENT_ID: ${AUTH0_AGENT_CLIENT_ID:?Set AUTH0_AGENT_CLIENT_ID}
-      AUTH0_AGENT_ISSUER: ${AUTH0_AGENT_ISSUER:?Set AUTH0_AGENT_ISSUER}
-      AUTH0_AGENT_AUDIENCE: ${AUTH0_AGENT_AUDIENCE:?Set AUTH0_AGENT_AUDIENCE}
+      AUTH0_AGENT_ISSUER: https://morohome.us.auth0.com/
+      AUTH0_AGENT_AUDIENCE: https://remote-destination.morohome.eu.org/hermes-api
     secrets: [device_key]
     volumes: ["destination_data:/data"]
     networks: [private]
@@ -41,12 +42,13 @@ services:
       traefik.http.services.waze-remote.loadbalancer.server.scheme: https
       traefik.http.services.waze-remote.loadbalancer.serverstransport: waze-remote-mtls@file
   egress:
+    image: waze-release-egress:20261108t185635
     build:
       context: ./server
       dockerfile: Dockerfile.egress
     restart: unless-stopped
     environment:
-      AUTH0_AGENT_ISSUER: ${AUTH0_AGENT_ISSUER:?Set AUTH0_AGENT_ISSUER}
+      AUTH0_AGENT_ISSUER: https://morohome.us.auth0.com/
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]

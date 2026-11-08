@@ -89,6 +89,27 @@ func TestAgentEndToEndViaConnect(t *testing.T) {
 			t.Fatalf("%s %s: got %d want %d", tc.method, tc.path, resp.StatusCode, tc.want)
 		}
 	}
+
+	// Agent submissions must be visible to the authenticated web status but not
+	// added to the agent status contract.
+	web := httptest.NewRecorder()
+	h.Config.Handler.ServeHTTP(web, httptest.NewRequest("GET", "/api/status", nil))
+	var ws map[string]any
+	if err := json.Unmarshal(web.Body.Bytes(), &ws); err != nil || ws["display"] != "fixture" {
+		t.Fatalf("web status: %s (%v)", web.Body.String(), err)
+	}
+	req, _ := http.NewRequest("GET", h.URL+"/agent/status", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var as map[string]any
+	err = json.NewDecoder(resp.Body).Decode(&as)
+	resp.Body.Close()
+	if err != nil || as["display"] != nil || as["uri"] != nil {
+		t.Fatalf("agent status leaked input: %#v %v", as, err)
+	}
 	select {
 	case <-connects:
 	default:

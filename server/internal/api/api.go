@@ -199,7 +199,7 @@ func (a *server) web(w http.ResponseWriter, r *http.Request) {
 			fail(w, e)
 			return
 		}
-		if e = a.s.PutIfCurrent(revision, uid, uri, warning); e != nil {
+		if e = a.s.PutIfCurrent(revision, uid, uri, warning, in.Input); e != nil {
 			fail(w, e)
 			return
 		}

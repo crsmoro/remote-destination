@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	_ "modernc.org/sqlite"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,8 @@ type Status struct {
 	Warning  *string    `json:"warning"`
 	LastSeen *time.Time `json:"last_seen"`
 	Online   bool       `json:"online"`
+	Display  string     `json:"display,omitempty"`
+	URI      string     `json:"uri,omitempty"`
 }
 type Store struct{ db *sql.DB }
 
@@ -31,6 +34,11 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	_, e = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS current (slot INTEGER PRIMARY KEY CHECK(slot=1), id TEXT NOT NULL, state TEXT NOT NULL, uri TEXT NOT NULL DEFAULT '', warning TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS heartbeat (slot INTEGER PRIMARY KEY CHECK(slot=1), seen INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS ordering (slot INTEGER PRIMARY KEY CHECK(slot=1), revision INTEGER NOT NULL); INSERT OR IGNORE INTO ordering VALUES(1,0);`)
 	if e != nil {
+		db.Close()
+		return nil, e
+	}
+	// ALTER is safe for existing databases and concurrent startup; duplicate means migrated.
+	if _, e = db.Exec(`ALTER TABLE current ADD COLUMN display TEXT NOT NULL DEFAULT ''`); e != nil && !strings.Contains(e.Error(), "duplicate column name: display") {
 		db.Close()
 		return nil, e
 	}
@@ -53,8 +61,12 @@ func (s *Store) BeginSubmit() (int64, error) {
 }
 
 // PutIfCurrent commits only if no later submission or cancellation was received.
-func (s *Store) PutIfCurrent(revision int64, id, uri, warning string) error {
-	r, err := s.db.Exec(`INSERT INTO current(slot,id,state,uri,warning,updated) SELECT 1,?,'pending',?,?,? FROM ordering WHERE slot=1 AND revision=? ON CONFLICT(slot) DO UPDATE SET id=excluded.id,state='pending',uri=excluded.uri,warning=excluded.warning,updated=excluded.updated`, id, uri, warning, time.Now().Unix(), revision)
+func (s *Store) PutIfCurrent(revision int64, id, uri, warning string, display ...string) error {
+	original := ""
+	if len(display) > 0 {
+		original = display[0]
+	}
+	r, err := s.db.Exec(`INSERT INTO current(slot,id,state,uri,warning,updated,display) SELECT 1,?,'pending',?,?,?,? FROM ordering WHERE slot=1 AND revision=? ON CONFLICT(slot) DO UPDATE SET id=excluded.id,state='pending',uri=excluded.uri,warning=excluded.warning,updated=excluded.updated,display=excluded.display`, id, uri, warning, time.Now().Unix(), original, revision)
 	if err != nil {
 		return err
 	}
@@ -76,7 +88,7 @@ func (s *Store) Cancel() error {
 	if _, e = tx.Exec(`UPDATE ordering SET revision=revision+1 WHERE slot=1`); e != nil {
 		return e
 	}
-	r, e := tx.Exec(`UPDATE current SET state='cancelled',uri='',warning='',updated=? WHERE slot=1 AND state IN ('pending','failed')`, time.Now().Unix())
+	r, e := tx.Exec(`UPDATE current SET state='cancelled',uri='',warning='',display='',updated=? WHERE slot=1 AND state IN ('pending','failed')`, time.Now().Unix())
 	if e != nil {
 		return e
 	}
@@ -126,7 +138,7 @@ func (s *Store) Ack(id, result string) error {
 	if result != "intent_sent" && result != "failed" {
 		return errors.New("invalid result")
 	}
-	r, e := s.db.Exec(`UPDATE current SET state=?, uri=CASE WHEN ?='intent_sent' THEN '' ELSE uri END, updated=? WHERE slot=1 AND id=? AND (state='pending' OR state=?)`, result, result, time.Now().Unix(), id, result)
+	r, e := s.db.Exec(`UPDATE current SET state=?, uri=CASE WHEN ?='intent_sent' THEN '' ELSE uri END, display='', updated=? WHERE slot=1 AND id=? AND (state='pending' OR state=?)`, result, result, time.Now().Unix(), id, result)
 	if e != nil {
 		return e
 	}
@@ -142,7 +154,7 @@ func (s *Store) Ack(id, result string) error {
 func (s *Store) Status() (Status, error) {
 	var st Status
 	var w string
-	e := s.db.QueryRow(`SELECT id,state,warning FROM current WHERE slot=1`).Scan(&st.ID, &st.State, &w)
+	e := s.db.QueryRow(`SELECT id,state,warning,CASE WHEN state='pending' THEN display ELSE '' END,CASE WHEN state='pending' THEN uri ELSE '' END FROM current WHERE slot=1`).Scan(&st.ID, &st.State, &w, &st.Display, &st.URI)
 	if e != nil && e != sql.ErrNoRows {
 		return st, e
 	}

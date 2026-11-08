@@ -306,6 +306,17 @@ func (a *server) agentRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if path == "/api/status" {
+		st, err := a.s.Status()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		st.Display = ""
+		st.URI = ""
+		respond(w, 200, st)
+		return
+	}
 	clone := r.Clone(r.Context())
 	u := *r.URL
 	u.Path = path
