@@ -17,7 +17,7 @@ func TestWebPendingDisplaySurvivesReopen(t *testing.T) {
 	}
 	h := New(s, "key")
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/destinations", strings.NewReader(`{"input":"Rua das Flores"}`)))
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/destinations", strings.NewReader(`{"input":"https://waze.com/ul?ll=1,2"}`)))
 	if w.Code != 201 {
 		t.Fatalf("submit: %d %s", w.Code, w.Body.String())
 	}
@@ -33,7 +33,7 @@ func TestWebPendingDisplaySurvivesReopen(t *testing.T) {
 	if e = json.Unmarshal(w.Body.Bytes(), &status); e != nil {
 		t.Fatal(e)
 	}
-	if status["display"] != "Rua das Flores" {
+	if status["display"] != "https://waze.com/ul?ll=1,2" {
 		t.Fatalf("display after reopen = %#v", status)
 	}
 }
@@ -56,7 +56,7 @@ func TestPendingDisplayLifecycle(t *testing.T) {
 	}
 	for _, result := range []string{"cancel", "intent_sent", "failed"} {
 		t.Run(result, func(t *testing.T) {
-			w := call("POST", "/api/destinations", `{"input":"<img src=x onerror=alert(1)>"}`)
+			w := call("POST", "/api/destinations", `{"input":"https://waze.com/ul?ll=1,2"}`)
 			if w.Code != 201 {
 				t.Fatal(w.Body.String())
 			}

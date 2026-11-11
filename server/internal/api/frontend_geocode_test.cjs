@@ -1,0 +1,4 @@
+const assert=require('node:assert/strict'),{setup,ok}=require('./frontend_helpers.cjs');
+(async()=>{const calls=[];const xss='<img src=x onerror=alert(1)>';const {nodes}=setup(async(path,opts)=>{calls.push({path,opts});return ok(path==='/api/destinations'?{display:xss,uri:'waze://safe'}:{state:'pending',display:xss})});
+for(const input of ['https://www.google.com/maps/search/?api=1&query=place','place']){nodes.destination.value=input;await nodes['destination-form'].handlers.submit({preventDefault(){}});assert.equal(JSON.parse(calls.filter(c=>c.path==='/api/destinations').at(-1).opts.body).input,input);assert.match(nodes['action-status'].textContent,/<img/);assert.equal(nodes.candidates.children.length,0)}
+assert.equal(calls.filter(c=>c.path==='/api/destinations').length,2);assert(!calls.some(c=>c.path.startsWith('/api/geocode')));console.log('automatic geocode and XSS text passed')})().catch(e=>{console.error(e);process.exitCode=1});

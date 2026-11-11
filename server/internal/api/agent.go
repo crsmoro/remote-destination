@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -292,6 +293,10 @@ func (a *server) agentRequest(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/agent/destinations":
 		method, scope, path = "POST", "destination:write", "/api/destinations"
+	case "/agent/geocode":
+		method, scope, path = "POST", "destination:write", "/api/geocode"
+	case "/agent/geocode/confirm":
+		method, scope, path = "POST", "destination:write", "/api/geocode/confirm"
 	case "/agent/status":
 		method, scope, path = "GET", "status:read", "/api/status"
 	default:
@@ -317,7 +322,18 @@ func (a *server) agentRequest(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, st)
 		return
 	}
-	clone := r.Clone(r.Context())
+	// The token has already passed signature and claim verification above.
+	tokenParts := strings.Split(strings.Fields(r.Header.Get("Authorization"))[1], ".")
+	payload, _ := base64.RawURLEncoding.DecodeString(tokenParts[1])
+	var identity struct {
+		Subject string `json:"sub"`
+	}
+	if strictJSON(payload, &identity) != nil || identity.Subject == "" {
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+	principal := "agent:" + a.agent.issuer + ":" + identity.Subject
+	clone := r.Clone(context.WithValue(r.Context(), principalKey{}, principal))
 	u := *r.URL
 	u.Path = path
 	clone.URL = &u

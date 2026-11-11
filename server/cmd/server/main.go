@@ -8,10 +8,22 @@ import (
 	"strings"
 	"time"
 	"waze-remoto/internal/api"
+	"waze-remoto/internal/destination"
 	"waze-remoto/internal/store"
 )
 
+func configureGeocoder(handler http.Handler) error {
+	lookup, err := destination.ConfiguredGeocoder()
+	if err != nil {
+		return err
+	}
+	return api.SetGeocoder(handler, lookup)
+}
+
 func main() {
+	if err := api.ValidateMunicipalityIndex(); err != nil {
+		log.Fatal("invalid municipality index configuration")
+	}
 	file := os.Getenv("DEVICE_KEY_FILE")
 	if file == "" {
 		log.Fatal("DEVICE_KEY_FILE is required")
@@ -45,7 +57,12 @@ func main() {
 			log.Fatal("invalid AUTH0_AGENT_CLIENT_ID")
 		}
 	}
-	server := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 8192}
+	if e = configureGeocoder(handler); e != nil {
+		log.Fatal("invalid geocoding configuration")
+	}
+	// Allow for sequential URL expansion (8s), Geocoding (8s), Places (8s),
+	// agent authentication (5s), and time for reading, storage, and response.
+	server := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 8192}
 	log.Printf("listening on %s; user routes require a trusted Auth0 proxy", addr)
 	log.Fatal(server.ListenAndServe())
 }

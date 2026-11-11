@@ -53,7 +53,7 @@ func allowedGoogle(u *url.URL) bool {
 	case "www.google.com":
 		return u.Path == "/maps" || strings.HasPrefix(u.Path, "/maps/")
 	case "maps.google.com":
-		return u.Path == "/" || u.Path == "/maps" || strings.HasPrefix(u.Path, "/maps/")
+		return u.Path == "" || u.Path == "/" || u.Path == "/maps" || strings.HasPrefix(u.Path, "/maps/")
 	}
 	return false
 }

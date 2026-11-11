@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -11,14 +12,29 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"waze-remoto/internal/destination"
 	"waze-remoto/internal/store"
 )
 
 type server struct {
-	s     *store.Store
-	key   [32]byte
-	agent *agentAuth
+	s         *store.Store
+	key       [32]byte
+	agent     *agentAuth
+	geocode   func(context.Context, string) ([]destination.Candidate, error)
+	tokenOnce sync.Once
+	tokenKey  [32]byte
+	tokenErr  error
+}
+
+// SetGeocoder must be called before serving requests.
+func SetGeocoder(h http.Handler, lookup destination.Geocoder) error {
+	a, ok := h.(*server)
+	if !ok || lookup == nil {
+		return errors.New("invalid geocoder")
+	}
+	a.geocode = lookup
+	return nil
 }
 
 func New(s *store.Store, key string) http.Handler {
@@ -173,41 +189,14 @@ func (a *server) device(w http.ResponseWriter, r *http.Request) {
 }
 func (a *server) web(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/api/geocode", "/api/geocode/confirm":
+		a.geocodeRequest(w, r)
 	case "/api/destinations":
-		if r.Method != "POST" {
-			http.Error(w, "method not allowed", 405)
-			return
-		}
-		var in struct {
-			Input string `json:"input"`
-		}
-		if !read(w, r, &in) {
-			return
-		}
-		revision, e := a.s.BeginSubmit()
-		if e != nil {
-			fail(w, e)
-			return
-		}
-		uri, warning, e := destination.Normalize(in.Input)
-		if e != nil {
-			http.Error(w, "invalid destination", 422)
-			return
-		}
-		uid, e := id()
-		if e != nil {
-			fail(w, e)
-			return
-		}
-		if e = a.s.PutIfCurrent(revision, uid, uri, warning, in.Input); e != nil {
-			fail(w, e)
-			return
-		}
-		var warn *string
-		if warning != "" {
-			warn = &warning
-		}
-		respond(w, 201, map[string]any{"id": uid, "state": "pending", "uri": uri, "warning": warn})
+		clone := r.Clone(r.Context())
+		u := *r.URL
+		u.Path = "/api/geocode/auto"
+		clone.URL = &u
+		a.geocodeRequest(w, clone)
 	case "/api/destinations/pending":
 		if r.Method != "DELETE" {
 			http.Error(w, "method not allowed", 405)

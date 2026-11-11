@@ -64,7 +64,7 @@ func TestSlowGoogleResolutionCannotOverrideNewerOperations(t *testing.T) {
 			go func() {
 				w := httptest.NewRecorder()
 				if operation == "submit" {
-					New(other, "key").ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/destinations", bytes.NewBufferString(`{"input":"newer"}`)))
+					New(other, "key").ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/destinations", bytes.NewBufferString(`{"input":"https://waze.com/ul?ll=1,2"}`)))
 				} else {
 					New(other, "key").ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/destinations/pending", nil))
 				}
@@ -88,15 +88,15 @@ func TestSlowGoogleResolutionCannotOverrideNewerOperations(t *testing.T) {
 				t.Fatal("new submit blocked by DNS")
 			}
 			close(release)
-			if w := <-done; w.Code != 409 {
-				t.Errorf("old submit status = %d, want 409", w.Code)
+			if w := <-done; w.Code != 422 {
+				t.Errorf("old submit status = %d, want 422", w.Code)
 			}
 			c, err := s.Pending()
 			if err != nil {
 				t.Fatal(err)
 			}
 			if operation == "submit" {
-				if c == nil || c.URI != "https://waze.com/ul?navigate=yes&q=newer" {
+				if c == nil || c.URI != "https://waze.com/ul?ll=1%2C2&navigate=yes" {
 					t.Fatalf("pending = %#v", c)
 				}
 				if err = s.Claim(c.ID); err != nil {

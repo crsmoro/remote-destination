@@ -21,7 +21,7 @@ type resolver interface {
 	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
 }
 
-var allowedHosts = []string{"maps.app.goo.gl", "goo.gl", "www.google.com", "maps.google.com"}
+var allowedHosts = []string{"maps.app.goo.gl", "goo.gl", "www.google.com", "maps.google.com", "geocode.googleapis.com", "places.googleapis.com"}
 
 func configuredHosts() ([]string, error) {
 	hosts := append([]string(nil), allowedHosts...)
@@ -36,19 +36,68 @@ func configuredHosts() ([]string, error) {
 	return append(hosts, u.Hostname()), nil
 }
 
+// lookup retries only transient resolver errors, within the caller's total budget.
+func lookup(ctx context.Context, r resolver, name string) ([]netip.Addr, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		ips, err := r.LookupNetIP(attemptCtx, "ip", name)
+		cancel()
+		if err == nil || attempt == 1 || ctx.Err() != nil {
+			return ips, err
+		}
+		var dnsErr *net.DNSError
+		var netErr net.Error
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return nil, err
+		}
+		if !errors.Is(err, context.DeadlineExceeded) && !(errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())) {
+			return nil, err
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	panic("unreachable")
+}
+
 func allowedTarget(ctx context.Context, r resolver, target string) bool {
+	allowed, _ := resolveAllowedTarget(ctx, r, target)
+	return allowed
+}
+
+// resolveAllowedTarget preserves fail-closed matching while reporting an
+// indeterminate result when transient DNS failures prevent validation.
+func resolveAllowedTarget(ctx context.Context, r resolver, target string) (bool, error) {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil || port != "443" {
-		return false
+		return false, nil
 	}
 	ip, err := netip.ParseAddr(host)
 	if err != nil || ip.Zone() != "" || !destination.PublicIP(ip) {
-		return false
+		return false, nil
 	}
 	ip = ip.Unmap()
+	var unavailable error
 	for _, name := range allowedHosts {
-		ips, err := r.LookupNetIP(ctx, "ip", name)
-		if err != nil || len(ips) == 0 {
+		ips, err := lookup(ctx, r, name)
+		if err != nil {
+			var dnsErr *net.DNSError
+			var netErr net.Error
+			if !(errors.As(err, &dnsErr) && dnsErr.IsNotFound) && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || (errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()))) {
+				unavailable = err
+			}
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			continue
+		}
+		if len(ips) == 0 {
 			continue
 		}
 		valid, found := true, false
@@ -61,10 +110,10 @@ func allowedTarget(ctx context.Context, r resolver, target string) bool {
 			}
 		}
 		if valid && found {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, unavailable
 }
 
 func serve(w http.ResponseWriter, req *http.Request) {
@@ -86,22 +135,30 @@ func serveWith(w http.ResponseWriter, req *http.Request, r resolver, dial func(c
 	var targets []string
 	for _, name := range allowedHosts {
 		if host == name {
-			ips, e := r.LookupNetIP(ctx, "ip", host)
-			if e == nil && len(ips) > 0 {
-				for _, ip := range ips {
-					if !destination.PublicIP(ip) {
-						targets = nil
-						break
-					}
-					targets = append(targets, net.JoinHostPort(ip.String(), port))
+			ips, e := lookup(ctx, r, host)
+			if e != nil || len(ips) == 0 {
+				http.Error(w, "unavailable", http.StatusBadGateway)
+				return
+			}
+			for _, ip := range ips {
+				if !destination.PublicIP(ip) {
+					http.Error(w, "forbidden", http.StatusForbidden)
+					return
 				}
+				targets = append(targets, net.JoinHostPort(ip.String(), port))
 			}
 			break
 		}
 	}
 	// Preserve the restricted literal-IP protocol for older clients.
-	if len(targets) == 0 && allowedTarget(ctx, r, req.Host) {
-		targets = append(targets, req.Host)
+	if len(targets) == 0 {
+		allowed, lookupErr := resolveAllowedTarget(ctx, r, req.Host)
+		if allowed {
+			targets = append(targets, req.Host)
+		} else if lookupErr != nil {
+			http.Error(w, "unavailable", http.StatusBadGateway)
+			return
+		}
 	}
 	if len(targets) == 0 {
 		http.Error(w, "forbidden", http.StatusForbidden)

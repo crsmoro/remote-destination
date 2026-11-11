@@ -76,7 +76,7 @@ func TestAgentEndToEndViaConnect(t *testing.T) {
 	for _, tc := range []struct {
 		method, path, body string
 		want               int
-	}{{"GET", "/agent/status", "", 200}, {"POST", "/agent/destinations", `{"input":"fixture"}`, 201}} {
+	}{{"GET", "/agent/status", "", 200}, {"POST", "/agent/destinations", `{"input":"https://waze.com/ul?ll=1,2"}`, 201}} {
 		req, _ := http.NewRequest(tc.method, h.URL+tc.path, strings.NewReader(tc.body))
 		req.Header.Set("Authorization", "Bearer "+token)
 		resp, err := http.DefaultClient.Do(req)
@@ -95,7 +95,7 @@ func TestAgentEndToEndViaConnect(t *testing.T) {
 	web := httptest.NewRecorder()
 	h.Config.Handler.ServeHTTP(web, httptest.NewRequest("GET", "/api/status", nil))
 	var ws map[string]any
-	if err := json.Unmarshal(web.Body.Bytes(), &ws); err != nil || ws["display"] != "fixture" {
+	if err := json.Unmarshal(web.Body.Bytes(), &ws); err != nil || ws["display"] != "https://waze.com/ul?ll=1,2" {
 		t.Fatalf("web status: %s (%v)", web.Body.String(), err)
 	}
 	req, _ := http.NewRequest("GET", h.URL+"/agent/status", nil)
@@ -195,7 +195,7 @@ func TestAgentSecurityAndSeparation(t *testing.T) {
 		want                     int
 	}{
 		{"valid status", "GET", "/agent/status", "", base, "", 200},
-		{"valid write", "POST", "/agent/destinations", `{"input":"Praça"}`, base, "", 201},
+		{"valid write", "POST", "/agent/destinations", `{"input":"https://waze.com/ul?ll=1,2"}`, base, "", 201},
 		{"missing token", "GET", "/agent/status", "", nil, "", 401},
 		{"device key", "GET", "/agent/status", "", nil, "device-key", 401},
 		{"wrong issuer", "GET", "/agent/status", "", makeClaims("iss", "https://evil/"), "", 401},

@@ -1,0 +1,6 @@
+FROM python:3.13-slim
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY tools/gps_tls.py tools/gps_tls_scheduler.py tools/gps_push_receiver.py /app/tools/
+USER 10001:10002
+CMD ["python3", "/app/tools/gps_tls_scheduler.py"]

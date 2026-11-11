@@ -1,0 +1,42 @@
+# Modelo para configuration.yaml; não aplicar sem revisar gps-push.md.
+rest_command:
+  gps_push:
+    url: !secret gps_push_url
+    method: POST
+    headers:
+      authorization: !secret gps_push_authorization
+    content_type: application/json
+    verify_ssl: true
+    timeout: 5
+    payload: '{{ snapshot }}'
+
+automation:
+  - alias: Publicar posição em cache para Waze Remoto
+    mode: queued
+    max: 20
+    triggers:
+      # Substitua pelo ID real, sem incluí-lo em arquivos versionados.
+      - trigger: state
+        entity_id: device_tracker.substituir
+      - trigger: time_pattern
+        minutes: '/1'
+      - trigger: homeassistant
+        event: start
+    actions:
+      - variables:
+          snapshot: >-
+            {% set e = 'device_tracker.substituir' %}
+            {% set lat = state_attr(e, 'latitude') %}
+            {% set lon = state_attr(e, 'longitude') %}
+            {% set valid = states(e) not in ['unknown', 'unavailable']
+              and is_number(lat) and is_number(lon)
+              and -90 <= (lat | float) <= 90 and -180 <= (lon | float) <= 180 %}
+            {% if valid %}
+            {{ {'sent_at': now().timestamp(), 'available': true,
+                'latitude': lat | float, 'longitude': lon | float} | tojson }}
+            {% else %}
+            {{ {'sent_at': now().timestamp(), 'available': false} | tojson }}
+            {% endif %}
+      - action: rest_command.gps_push
+        data:
+          snapshot: '{{ snapshot }}'

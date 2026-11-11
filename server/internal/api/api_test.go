@@ -32,7 +32,7 @@ func TestDeviceFlow(t *testing.T) {
 	if w := call("POST", "/api/destinations", `{"input":"X"}`, "device-key"); w.Code != 401 {
 		t.Fatalf("device key user access %d", w.Code)
 	}
-	w := call("POST", "/api/destinations", `{"input":"Praça"}`, "")
+	w := call("POST", "/api/destinations", `{"input":"https://waze.com/ul?ll=1,2"}`, "")
 	if w.Code != 201 {
 		t.Fatalf("create %d %s", w.Code, w.Body)
 	}

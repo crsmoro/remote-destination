@@ -1,0 +1,13 @@
+# Exemplo candidato: revisar serviço backend e executar `docker compose config`
+# com o compose de produção real antes de qualquer implantação autorizada.
+services:
+  backend:
+    environment:
+      WAZE_MUNICIPIOS_FILE: /run/municipios/municipios.json
+    volumes:
+      - type: bind
+        source: ${WAZE_MUNICIPIOS_HOST_FILE:?Informe caminho absoluto de arquivo privado existente}
+        target: /run/municipios/municipios.json
+        read_only: true
+        bind:
+          create_host_path: false

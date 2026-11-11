@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const src = fs.readFileSync(__dirname + '/static/app.js', 'utf8');
 async function run(status) {
  const nodes = {};
- for (const id of ['connection','state','warning','converted','destination-form','destination','cancel','pending-display']) nodes[id] = {textContent:'', addEventListener(){}};
- const context = {document:{getElementById:id=>nodes[id]}, fetch:async()=>({ok:true,json:async()=>status}),setInterval(){}};
+ for (const id of ['connection','state','warning','converted','destination-form','destination','city','reference','candidates','cancel','pending-display']) nodes[id] = {textContent:'', replaceChildren(){}, addEventListener(){}};
+ const context = {crypto:require('node:crypto').webcrypto,document:{getElementById:id=>nodes[id]}, fetch:async()=>({ok:true,json:async()=>status}),setInterval(){}};
  vm.runInNewContext(src,context); await new Promise(resolve=>setImmediate(resolve)); return nodes;
 }
 function deferred() {
@@ -15,10 +15,10 @@ function deferred() {
 }
 function controlledApp() {
  const nodes = {}, calls = [];
- for (const id of ['connection','state','warning','converted','destination-form','destination','cancel','pending-display']) {
-  nodes[id] = {textContent:'', value:'', handlers:{}, addEventListener(type, fn){this.handlers[type] = fn;}};
+ for (const id of ['connection','state','warning','converted','destination-form','destination','city','reference','candidates','cancel','pending-display']) {
+  nodes[id] = {textContent:'', value:'', handlers:{}, replaceChildren(){}, addEventListener(type, fn){this.handlers[type] = fn;}};
  }
- const context = {document:{getElementById:id=>nodes[id]}, fetch(path, options) {
+ const context = {crypto:require('node:crypto').webcrypto,document:{getElementById:id=>nodes[id]}, fetch(path, options) {
   const d = deferred(); calls.push({path, options, ...d}); return d.promise;
  }, setInterval(fn){context.tick = fn;}};
  vm.runInNewContext(src, context);
@@ -33,6 +33,21 @@ async function slowPollTest() {
  assert.equal(nodes['pending-display'].textContent, 'Destino pendente: slow response');
  respond(calls[1], {state:'cancelled', online:true}); await newer;
  assert.equal(nodes.state.textContent, 'Cancelado');
+}
+async function persistentRequestErrorTest() {
+ const {nodes, calls, context} = controlledApp();
+ respond(calls[0], {online:true, warning:'Aviso do carro'}); await flush();
+ nodes.destination.value = 'endereço inválido';
+ const submit = nodes['destination-form'].handlers.submit({preventDefault(){}});
+ calls[1].resolve({ok:false, status:422, text:async()=>'<img src=x>segredo'}); await submit;
+ assert.match(nodes.warning.textContent, /422/);
+ assert.ok(!nodes.warning.textContent.includes('segredo'));
+ const poll = context.tick(); respond(calls[2], {online:true, warning:'Aviso atualizado'}); await poll;
+ assert.match(nodes.warning.textContent, /422/);
+ assert.match(nodes.warning.textContent, /Aviso atualizado/);
+ nodes.destination.handlers.input();
+ assert.doesNotMatch(nodes.warning.textContent, /422/);
+ assert.match(nodes.warning.textContent, /Aviso atualizado/);
 }
 async function raceTest() {
  const {nodes, calls, context} = controlledApp();
@@ -59,7 +74,7 @@ async function additionalRaces() {
   calls[1].reject(new Error('mutation failure')); await operation;
   respond(calls[2], {state:'pending', display:'obsolete', online:true}); await during;
   calls[0].reject(new Error('old failure')); await flush();
-  assert.equal(nodes.warning.textContent, 'mutation failure');
+  assert.equal(nodes.warning.textContent, 'Conexão indisponível');
   assert.equal(nodes['pending-display'].textContent, '');
   assert.equal(nodes.connection.textContent, '');
  }
@@ -95,6 +110,7 @@ async function additionalRaces() {
  }
 }
 (async()=>{
+ await persistentRequestErrorTest();
  await slowPollTest();
  await raceTest();
  await additionalRaces();

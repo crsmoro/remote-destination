@@ -1,0 +1,18 @@
+# Optional overlay; never use without the documented Google and deployment gates.
+services:
+  backend:
+    environment:
+      WAZE_GEOCODING_PROVIDER: google
+      GOOGLE_GEOCODING_KEY_FILE: /run/secrets/google_geocoding_key
+      GOOGLE_GEOCODING_LIMIT_DB: /data/google-geocoding-limit.db
+      GOOGLE_GEOCODING_DAILY_LIMIT: ${GOOGLE_GEOCODING_DAILY_LIMIT:-100}
+      GOOGLE_GEOCODING_INTERVAL: ${GOOGLE_GEOCODING_INTERVAL:-1s}
+      GOOGLE_PLACES_DAILY_LIMIT: ${GOOGLE_PLACES_DAILY_LIMIT:-100}
+      GOOGLE_PLACES_INTERVAL: ${GOOGLE_PLACES_INTERVAL:-1s}
+    volumes:
+      - type: bind
+        source: ${GOOGLE_GEOCODING_KEY_HOST_FILE:?Set an absolute path to the key file outside the repository}
+        target: /run/secrets/google_geocoding_key
+        read_only: true
+        bind:
+          create_host_path: false

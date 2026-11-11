@@ -1,19 +1,29 @@
 # Candidate only: do not enable the route before the documented release gates.
 services:
   backend:
-    image: waze-release-backend:20261108t185635
+    image: sha256:98a6a8eb7667f314019a4aed9d0ae8636bb32391982846e68ccf97aa9293ee6c
     build: ./server
     restart: unless-stopped
     environment:
       DATABASE_PATH: /data/destinations.db
       LISTEN_ADDR: :8080
+      WAZE_MUNICIPIOS_FILE: /run/municipios/municipios.json
+      WAZE_POSITION_FILE: /run/gps/position.json
       DEVICE_KEY_FILE: /run/secrets/device_key
+      WAZE_GEOCODING_PROVIDER: google
+      GOOGLE_GEOCODING_KEY_FILE: /run/secrets/google_geocoding_key
+      GOOGLE_GEOCODING_LIMIT_DB: /data/google-geocoding-limit.db
+      GOOGLE_PLACES_DAILY_LIMIT: "100"
+      GOOGLE_PLACES_INTERVAL: 1s
+      GOOGLE_GEOCODING_DAILY_LIMIT: "100"
+      GOOGLE_GEOCODING_INTERVAL: 1s
       WAZE_EGRESS_PROXY: egress:3128
       AUTH0_AGENT_CLIENT_ID: ${AUTH0_AGENT_CLIENT_ID:?Set AUTH0_AGENT_CLIENT_ID}
       AUTH0_AGENT_ISSUER: https://morohome.us.auth0.com/
       AUTH0_AGENT_AUDIENCE: https://remote-destination.morohome.eu.org/hermes-api
     secrets: [device_key]
-    volumes: ["destination_data:/data"]
+    group_add: ["48873"]
+    volumes: ["destination_data:/data", "gps-deploy-df11bb52309749d6855e6f377d70b5b9-state:/run/gps:ro", "/etc/jarvis/hermes/data/waze-municipios-ibge:/run/municipios:ro", "/etc/jarvis/hermes/data/secrets/google-prep-b8e92e683d02/google_geocoding_key:/run/secrets/google_geocoding_key:ro"]
     networks: [private]
     labels:
       traefik.enable: "false"
@@ -42,7 +52,7 @@ services:
       traefik.http.services.waze-remote.loadbalancer.server.scheme: https
       traefik.http.services.waze-remote.loadbalancer.serverstransport: waze-remote-mtls@file
   egress:
-    image: waze-release-egress:20261108t185635
+    image: sha256:aa560e0c9d1e19065f0aa70436138b796a66f6e6ed027a3c12d074f4ce2d7e65
     build:
       context: ./server
       dockerfile: Dockerfile.egress
@@ -61,6 +71,8 @@ secrets:
     file: ${DEVICE_KEY_HOST_FILE:?Set DEVICE_KEY_HOST_FILE to an absolute host file}
 volumes:
   destination_data:
+  gps-deploy-df11bb52309749d6855e6f377d70b5b9-state:
+    external: true
 networks:
   private:
     internal: true

@@ -1,0 +1,6 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const nodes={}; function node(){return {textContent:'',value:'',handlers:{},children:[],replaceChildren(){this.children=[]},appendChild(x){this.children.push(x)},addEventListener(k,f){this.handlers[k]=f}}}
+for(const id of ['connection','state','warning','converted','destination-form','destination','city','reference','cancel','pending-display','candidates','submit','action-status'])nodes[id]=node();
+let calls=[];const ctx={crypto:require('node:crypto').webcrypto,document:{getElementById:id=>nodes[id],createElement:node},setInterval(){},fetch:async(path,opts)=>{calls.push(path);return {ok:true,json:async()=>path==='/api/status'?{state:'pending'}:{uri:'waze',display:'Mercado Joinville',reference:'joinville',warning:'Nome não verificado'}}}};
+vm.runInNewContext(fs.readFileSync(__dirname+'/static/app.js','utf8'),ctx);
+(async()=>{nodes.destination.value='Mercado';await nodes['destination-form'].handlers.submit({preventDefault(){}});assert(calls.includes('/api/destinations'));assert(!calls.includes('/api/geocode'));assert.match(nodes['action-status'].textContent,/Mercado Joinville/);assert.match(nodes.warning.textContent,/Nome não verificado/);console.log('automatic UI passed')})().catch(e=>{console.error(e);process.exit(1)});

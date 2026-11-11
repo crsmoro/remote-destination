@@ -32,7 +32,7 @@ func Open(path string) (*Store, error) {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	_, e = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS current (slot INTEGER PRIMARY KEY CHECK(slot=1), id TEXT NOT NULL, state TEXT NOT NULL, uri TEXT NOT NULL DEFAULT '', warning TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS heartbeat (slot INTEGER PRIMARY KEY CHECK(slot=1), seen INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS ordering (slot INTEGER PRIMARY KEY CHECK(slot=1), revision INTEGER NOT NULL); INSERT OR IGNORE INTO ordering VALUES(1,0);`)
+	_, e = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS current (slot INTEGER PRIMARY KEY CHECK(slot=1), id TEXT NOT NULL, state TEXT NOT NULL, uri TEXT NOT NULL DEFAULT '', warning TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS heartbeat (slot INTEGER PRIMARY KEY CHECK(slot=1), seen INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS ordering (slot INTEGER PRIMARY KEY CHECK(slot=1), revision INTEGER NOT NULL); INSERT OR IGNORE INTO ordering VALUES(1,0); CREATE TABLE IF NOT EXISTS idempotency (principal TEXT NOT NULL, key_hash TEXT NOT NULL, body_hash TEXT NOT NULL, revision INTEGER NOT NULL, response BLOB, created INTEGER NOT NULL, PRIMARY KEY(principal,key_hash));`)
 	if e != nil {
 		db.Close()
 		return nil, e
@@ -78,6 +78,133 @@ func (s *Store) PutIfCurrent(revision int64, id, uri, warning string, display ..
 		return ErrConflict
 	}
 	return nil
+}
+
+// BeginIdempotent reserves both the logical request and its ordering revision.
+// A timed-out owner can be fenced off before a retry takes over.
+func (s *Store) BeginIdempotent(principal, key, body string) (int64, []byte, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, nil, err
+	}
+	defer tx.Rollback()
+	// A write first serializes reservations across independent database connections.
+	if _, err = tx.Exec(`DELETE FROM idempotency WHERE created < ?`, time.Now().Add(-7*24*time.Hour).Unix()); err != nil {
+		return 0, nil, err
+	}
+	var hash string
+	var revision int64
+	var response []byte
+	var created int64
+	err = tx.QueryRow(`SELECT body_hash,revision,response,created FROM idempotency WHERE principal=? AND key_hash=?`, principal, key).Scan(&hash, &revision, &response, &created)
+	if err == nil {
+		if hash != body {
+			return 0, nil, ErrConflict
+		}
+		if response != nil {
+			return revision, response, tx.Commit()
+		}
+		if time.Now().Unix()-created < 60 {
+			return 0, nil, ErrConflict
+		}
+		// The old revision is a fencing token. Do not resurrect an operation
+		// that a later submission or cancellation already superseded.
+		var next int64
+		err = tx.QueryRow(`UPDATE ordering SET revision=revision+1 WHERE slot=1 AND revision=? RETURNING revision`, revision).Scan(&next)
+		if err == sql.ErrNoRows {
+			return 0, nil, ErrConflict
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		if _, err = tx.Exec(`UPDATE idempotency SET revision=?,created=? WHERE principal=? AND key_hash=? AND revision=? AND response IS NULL`, next, time.Now().Unix(), principal, key, revision); err != nil {
+			return 0, nil, err
+		}
+		return next, nil, tx.Commit()
+	}
+	if err != sql.ErrNoRows {
+		return 0, nil, err
+	}
+	var count int
+	if err = tx.QueryRow(`SELECT count(*) FROM idempotency`).Scan(&count); err != nil {
+		return 0, nil, err
+	}
+	if count >= 10000 {
+		return 0, nil, ErrConflict
+	}
+	if err = tx.QueryRow(`UPDATE ordering SET revision=revision+1 WHERE slot=1 RETURNING revision`).Scan(&revision); err != nil {
+		return 0, nil, err
+	}
+	if _, err = tx.Exec(`INSERT INTO idempotency(principal,key_hash,body_hash,revision,created) VALUES(?,?,?,?,?)`, principal, key, body, revision, time.Now().Unix()); err != nil {
+		return 0, nil, err
+	}
+	return revision, nil, tx.Commit()
+}
+
+// ReleaseIdempotent discards only the caller's still-uncommitted reservation.
+func (s *Store) ReleaseIdempotent(principal, key string, revision int64) error {
+	_, err := s.db.Exec(`DELETE FROM idempotency WHERE principal=? AND key_hash=? AND revision=? AND response IS NULL`, principal, key, revision)
+	return err
+}
+
+// ConfirmIdempotent commits the response, ordering and command as one transaction.
+func (s *Store) ConfirmIdempotent(revision int64, id, uri, display, principal, key string, response []byte) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	r, err := tx.Exec(`UPDATE ordering SET revision=revision+1 WHERE slot=1 AND revision=?`, revision)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrConflict
+	}
+	if _, err = tx.Exec(`INSERT INTO current(slot,id,state,uri,warning,updated,display) VALUES(1,?,'pending',?,'',?,?) ON CONFLICT(slot) DO UPDATE SET id=excluded.id,state='pending',uri=excluded.uri,warning='',updated=excluded.updated,display=excluded.display`, id, uri, time.Now().Unix(), display); err != nil {
+		return err
+	}
+	r, err = tx.Exec(`UPDATE idempotency SET response=? WHERE principal=? AND key_hash=? AND revision=? AND response IS NULL`, response, principal, key, revision)
+	if err != nil {
+		return err
+	}
+	n, err = r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrConflict
+	}
+	return tx.Commit()
+}
+
+// ConfirmIfCurrent consumes a reservation and installs its command atomically.
+func (s *Store) ConfirmIfCurrent(revision int64, id, uri, display string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	r, err := tx.Exec(`UPDATE ordering SET revision=revision+1 WHERE slot=1 AND revision=?`, revision)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrConflict
+	}
+	_, err = tx.Exec(`INSERT INTO current(slot,id,state,uri,warning,updated,display) VALUES(1,?,'pending',?,'',?,?) ON CONFLICT(slot) DO UPDATE SET id=excluded.id,state='pending',uri=excluded.uri,warning='',updated=excluded.updated,display=excluded.display`, id, uri, time.Now().Unix(), display)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (s *Store) Cancel() error {
 	tx, e := s.db.Begin()

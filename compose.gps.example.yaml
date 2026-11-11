@@ -1,0 +1,59 @@
+# Staging template only; provision external volumes and choose a safe subnet first.
+services:
+  issuer:
+    build:
+      context: .
+      dockerfile: Dockerfile.gps
+    user: "10001:10002"
+    read_only: true
+    tmpfs: ["/tmp:mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    environment:
+      GPS_PKI_DIR: /private
+      GPS_LEAF_DIR: /leaf
+    volumes:
+      - gps-ca:/private
+      - gps-leaf:/leaf
+    networks: [gps]
+  receiver:
+    build:
+      context: .
+      dockerfile: Dockerfile.gps
+    command: [python3, /app/tools/gps_push_receiver.py]
+    user: "10003:10002"
+    read_only: true
+    tmpfs: ["/tmp:mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    environment:
+      GPS_LISTEN_IP: 172.29.41.10
+      GPS_PORT: "8443"
+      GPS_TLS_CERT: /leaf/current.pem
+      GPS_TLS_KEY: /leaf/current.pem
+      GPS_TLS_CA_FILE: /public/ca.pem
+      GPS_TLS_HOSTNAME: gps.internal.test
+      GPS_SECRET_FILE: /secret/token
+      GPS_SNAPSHOT_FILE: /state/position.json
+    volumes:
+      - gps-leaf:/leaf:ro
+      - gps-public:/public:ro
+      - gps-secret:/secret:ro
+      - gps-state:/state
+    networks:
+      gps:
+        ipv4_address: 172.29.41.10
+volumes:
+  gps-ca: {external: true}
+  gps-leaf: {external: true}
+  gps-public: {external: true}
+  gps-secret: {external: true}
+  gps-state: {external: true}
+networks:
+  gps:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.29.41.0/24
